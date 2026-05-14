@@ -64,9 +64,31 @@ int wrap_ahb_in_vkimage(VulkanSession &vk, AhbImage &out) {
             // for. Some drivers leave fmtProps.format UNDEFINED even for plain RGBA.
             effectiveFormat = out.format;
         } else {
-            LOGE("AHB has no Vulkan format and no caller hint (externalFormat=0x%llx) — YCbCr path not implemented",
-                 (unsigned long long)fmtProps.externalFormat);
-            return kErrAhbImageCreate;
+            // Mali-G57 (MediaTek Helio G99) and other Mali drivers frequently
+            // report VK_FORMAT_UNDEFINED for RGBA8 AHBs from MediaProjection.
+            // Infer the format from the AHardwareBuffer description instead of
+            // failing — the image will work fine with the inferred format.
+            AHardwareBuffer_Desc descFallback{};
+            AHardwareBuffer_describe(out.ahb, &descFallback);
+            switch (descFallback.format) {
+                case AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM:
+                case AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM:
+                    effectiveFormat = VK_FORMAT_R8G8B8A8_UNORM; break;
+                case AHARDWAREBUFFER_FORMAT_R8G8B8_UNORM:
+                    effectiveFormat = VK_FORMAT_R8G8B8_UNORM; break;
+                case AHARDWAREBUFFER_FORMAT_R5G6B5_UNORM:
+                    effectiveFormat = VK_FORMAT_R5G6B5_UNORM_PACK16; break;
+                case AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT:
+                    effectiveFormat = VK_FORMAT_R16G16B16A16_SFLOAT; break;
+                case AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM:
+                    effectiveFormat = VK_FORMAT_A2B10G10R10_UNORM_PACK32; break;
+                default:
+                    LOGE("AHB has no Vulkan format, no caller hint, and unsupported AHB format %u (externalFormat=0x%llx)",
+                         descFallback.format, (unsigned long long)fmtProps.externalFormat);
+                    return kErrAhbImageCreate;
+            }
+            LOGW("AHB format was VK_FORMAT_UNDEFINED; inferred %d from AHB desc format %u",
+                 (int)effectiveFormat, descFallback.format);
         }
     }
 

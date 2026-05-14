@@ -440,11 +440,11 @@ bool shouldSuppressGeneratedFrames(const AhbImage &prev, const AhbImage &cur) {
 
     void *prevPtr = nullptr;
     void *curPtr = nullptr;
-    if (AHardwareBuffer_lock(prev.ahb, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY,
+    if (AHardwareBuffer_lock(prev.ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
             -1, nullptr, &prevPtr) != 0 || prevPtr == nullptr) {
         return false;
     }
-    if (AHardwareBuffer_lock(cur.ahb, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY,
+    if (AHardwareBuffer_lock(cur.ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
             -1, nullptr, &curPtr) != 0 || curPtr == nullptr) {
         AHardwareBuffer_unlock(prev.ahb, nullptr);
         return false;
@@ -600,6 +600,19 @@ bool createSwapchain() {
     if (!g.vk.hasSwapchain) return false;
     if (g.outWindow == nullptr) return false;
     if (g.vk.instance == VK_NULL_HANDLE) return false;
+    // Skip WSI entirely on ARM Mali GPUs (vendor 0x13B5). On Mali-G57 and
+    // similar, the first failed vkCreateAndroidSurfaceKHR can corrupt the
+    // Vulkan instance state, causing VK_ERROR_DEVICE_LOST on framegen's
+    // separate device. The CPU blit path is stable on Mali — just slower.
+    {
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(g.vk.physicalDevice, &props);
+        if (props.vendorID == 0x13B5) {  // ARM vendor ID
+            LOGI("createSwapchain: skipping WSI on ARM Mali GPU (vendor=0x%x) — using CPU blit",
+                 props.vendorID);
+            return false;
+        }
+    }
     // Once the worker has produced any CPU buffer on this ANativeWindow
     // (overlay clear, CPU blit fallback, etc.) the BufferQueue is locked to
     // a CPU producer and vkCreateAndroidSurfaceKHR will return
@@ -1580,7 +1593,7 @@ void blitOutputToWindow(const AhbImage &out, bool allowGpuPost = true) {
 
     void *srcPtr = nullptr;
     if (AHardwareBuffer_lock(out.ahb,
-            AHARDWAREBUFFER_USAGE_CPU_READ_RARELY,
+            AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
             -1, nullptr, &srcPtr) != 0 || srcPtr == nullptr) {
         LOGW("AHardwareBuffer_lock(read) failed on output");
         return;
@@ -1858,7 +1871,7 @@ void workerThread() {
             AHardwareBuffer_Desc d{};
             AHardwareBuffer_describe(a, &d);
             void *ptr = nullptr;
-            if (AHardwareBuffer_lock(a, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY,
+            if (AHardwareBuffer_lock(a, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
                     -1, nullptr, &ptr) != 0 || ptr == nullptr) {
                 LOGI("%s: lock failed", label);
                 return;

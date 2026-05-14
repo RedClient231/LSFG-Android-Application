@@ -10,6 +10,7 @@ import android.os.RemoteException
 import android.os.SystemClock
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.Looper
 import com.lsfg.android.BuildConfig
 import com.lsfg.android.shizuku.IShizukuCaptureService
 import com.lsfg.android.shizuku.IShizukuFrameCallback
@@ -243,12 +244,23 @@ class ShizukuCaptureEngine(
             errorListener?.onError("Shizuku is not running or permission is missing")
             return
         }
+        // Set a connection timeout. On MediaTek devices with strict SELinux policies,
+        // the binder connection can hang indefinitely. If the service doesn't connect
+        // within 5 seconds, report the error so the user can fall back to MediaProjection.
+        val args = userServiceArgs()
         runCatching {
-            Shizuku.bindUserService(userServiceArgs(), connection)
+            Shizuku.bindUserService(args, connection)
         }.onFailure {
             LsfgLog.w(TAG, "bindUserService failed", it)
             errorListener?.onError("Shizuku bind failed: ${it.message ?: it.javaClass.simpleName}")
         }
+        // Post a delayed check — if the service hasn't connected after 5s, warn the user.
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (service == null && pendingStart != null) {
+                LsfgLog.w(TAG, "Shizuku service connection timeout — possible SELinux denial on MediaTek")
+                errorListener?.onError("Shizuku connection timeout. On MediaTek devices, SELinux may block Shizuku. Try MediaProjection mode instead.")
+            }
+        }, 5000L)
     }
 
     private fun userServiceArgs(): Shizuku.UserServiceArgs =
@@ -281,12 +293,19 @@ class ShizukuCaptureEngine(
         }
 
         override fun onFrameMetrics(timestampNs: Long, frameTimeNs: Long, pacingJitterNs: Long) {
-            NativeBridge.reportShizukuTiming(timestampNs, frameTimeNs, pacingJitterNs)
-            if (frameTimeNs > 0L && pacingJitterNs > frameTimeNs) {
-                LsfgLog.w(
-                    TAG,
-                    "Shizuku pacing spike frame=${frameTimeNs / 1_000_000.0}ms jitter=${pacingJitterNs / 1_000_000.0}ms",
-                )
+            try {
+                NativeBridge.reportShizukuTiming(timestampNs, frameTimeNs, pacingJitterNs)
+                if (frameTimeNs > 0L && pacingJitterNs > frameTimeNs) {
+                    LsfgLog.w(
+                        TAG,
+                        "Shizuku pacing spike frame=${frameTimeNs / 1_000_000.0}ms jitter=${pacingJitterNs / 1_000_000.0}ms",
+                    )
+                }
+            } catch (t: Throwable) {
+                // On MediaTek devices, SELinux can kill the Shizuku binder thread
+                // mid-transaction, causing DeadObjectException or SecurityException.
+                LsfgLog.w(TAG, "Shizuku onFrameMetrics failed (possible SELinux denial)", t)
+                errorListener?.onError("Shizuku timing failed: ${t.message}")
             }
         }
     }
