@@ -12,7 +12,7 @@ jobs:
         with:
           path: LSFG-Android-Application
 
-      - name: Checkout lsfg-vk-android submodule
+      - name: Checkout lsfg-vk-android (must be sibling directory for CMake)
         uses: actions/checkout@v4
         with:
           repository: FrankBarretta/lsfg-vk-android
@@ -28,8 +28,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install NDK
-        run: sdkmanager "ndk;27.0.12077973"
+      - name: Install NDK and CMake
+        run: |
+          sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Build debug APK
         working-directory: LSFG-Android-Application
